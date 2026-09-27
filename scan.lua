@@ -267,6 +267,31 @@ end
 local call_start = "^%s*([%a_][%w_]*%.[%a_][%w_]*)%s*%("
 local editable_fns = { ["o.bind"] = true, ["o.bind_toggle"] = true, ["hl.bind"] = true, ["hl.unbind"] = true }
 
+-- A line with its trailing comment removed. Quoted strings are skipped, so the
+-- "--" in a command like "wtype -- 'hi'" is not mistaken for a comment.
+local function strip_comment(line)
+  local i, n = 1, #line
+  while i <= n do
+    local c = line:sub(i, i)
+    if c == '"' or c == "'" then
+      i = i + 1
+      while i <= n and line:sub(i, i) ~= c do
+        if line:sub(i, i) == "\\" then i = i + 1 end
+        i = i + 1
+      end
+    elseif c == "[" and line:match("^%[=*%[", i) then
+      local eq = line:match("^%[(=*)%[", i)
+      local close = line:find("]" .. eq .. "]", i, true)
+      if not close then return line end
+      i = close + #eq + 1
+    elseif c == "-" and line:sub(i + 1, i + 1) == "-" then
+      return line:sub(1, i - 1)
+    end
+    i = i + 1
+  end
+  return line
+end
+
 -- The statement starting on `start` ends on the first line that makes the
 -- slice compile on its own.
 local function span_for(start)
@@ -277,7 +302,7 @@ local function span_for(start)
   for stop = start, math.min(#lines, start + 80) do
     local chunk = table.concat(lines, "\n", start, stop)
     if load(chunk, "span", "t") then
-      local tail = lines[stop]:gsub("%-%-.*$", ""):gsub("%s+$", "")
+      local tail = strip_comment(lines[stop]):gsub("%s+$", "")
       if tail:sub(-1) ~= ")" then return nil end
       return { start = start, stop = stop, fn = fn }
     end

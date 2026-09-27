@@ -132,7 +132,14 @@ function comboId(text) {
 function keyLabel(key) {
   var k = String(key || "")
   var code = k.match(/^code:(\d+)$/)
-  if (code) return CODE_NAMES[code[1]] ? keyLabel(CODE_NAMES[code[1]]) : k
+  if (code) {
+    if (CODE_NAMES[code[1]]) return keyLabel(CODE_NAMES[code[1]])
+    // evdev F13–F24 (xkb keycodes 191–202). Label only: their keysyms vary
+    // by layout (F13 is XF86Tools on pc), so they stay code: in the config.
+    var n = Number(code[1])
+    if (n >= 191 && n <= 202) return "F" + (n - 178)
+    return k
+  }
   var known = KEY_LABELS[k.toLowerCase()]
   if (known) {
     var sym = { comma: ",", period: ".", slash: "/", backslash: "\\", semicolon: ";", apostrophe: "'",

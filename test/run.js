@@ -52,5 +52,6 @@ const lines = ["-- A", "o.bind(1)", "", "-- shared", "o.bind(2)", "o.bind(3)", "
 ok(JSON.stringify(K.applyOps(lines, K.deletionOps(lines, [{ start: 2, stop: 2 }]))) === JSON.stringify(["-- shared", "o.bind(2)", "o.bind(3)", "", "-- M", "o.bind(4)", "-- M"]), "delete with own comment")
 ok(JSON.stringify(K.applyOps(lines, K.deletionOps(lines, [{ start: 5, stop: 5 }]))) === JSON.stringify(["-- A", "o.bind(1)", "", "-- shared", "o.bind(3)", "", "-- M", "o.bind(4)", "-- M"]), "delete keeps shared comment")
 ok(JSON.stringify(K.applyOps(lines, K.deletionOps(lines, [{ start: 9, stop: 9 }]))) === JSON.stringify(["-- A", "o.bind(1)", "", "-- shared", "o.bind(2)", "o.bind(3)"]), "delete bracketed comment")
+ok(K.keyLabel("code:191") === "F13" && K.keyLabel("code:202") === "F24", "F13-F24 labels")
 console.log(fail ? fail + " failures" : "all passed")
 process.exit(fail ? 1 : 0)
