@@ -17,6 +17,17 @@ Optional launcher entry (so it shows up under **Super + Space › Keysmith**):
 cp ~/.config/omarchy/plugins/ebirkhoff.keysmith/keysmith.desktop ~/.local/share/applications/
 ```
 
+## Remove
+
+```bash
+omarchy plugin remove ebirkhoff.keysmith --yes
+rm -f ~/.local/share/applications/keysmith.desktop
+```
+
+Your shortcuts stay: they are plain Lua in `~/.config/hypr/bindings.lua`.
+Backups Keysmith made are next to it as `bindings.lua.bak.keysmith.*`, and
+you can delete them whenever you like.
+
 ## Open it
 
 - **Super + Space**, type *Keysmith* (with the launcher entry installed), or
