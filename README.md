@@ -2,6 +2,8 @@
 
 **A GUI for your Hyprland keyboard shortcuts on Omarchy.**
 
+<img src="preview.png" alt="The Keysmith panel: a new-shortcut editor with Ctrl + Alt + T recorded, over the list of Omarchy default bindings" width="820">
+
 Keysmith is an Omarchy shell panel for viewing, adding, editing and removing
 the shortcuts in `~/.config/hypr/bindings.lua`, without hand-writing Lua.
 
