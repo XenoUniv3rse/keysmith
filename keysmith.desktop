@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Keysmith
+GenericName=Keyboard Shortcuts
+Comment=View, add, edit and remove your Hyprland keyboard shortcuts
+Exec=omarchy-shell shell toggle ebirkhoff.keysmith
+TryExec=omarchy-shell
+Icon=preferences-desktop-keyboard-shortcuts
+Terminal=false
+StartupNotify=false
+Categories=Settings;DesktopSettings;
+Keywords=keysmith;keybindings;shortcuts;hotkeys;hyprland;omarchy;keyboard;bind;
