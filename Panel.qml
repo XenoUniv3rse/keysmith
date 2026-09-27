@@ -60,6 +60,10 @@ Item {
   property bool recording: false
   property var recordMods: []
 
+  // macro recorder
+  property bool macroRecording: false
+  property var macroEvents: []
+
   // confirm
   property var confirmRow: null
   property string confirmMessage: ""
@@ -83,6 +87,15 @@ Item {
   // ------------------------------------------------------------ lifecycle
 
   function open(payloadJson) {
+    var payload = {}
+    try { payload = JSON.parse(payloadJson || "{}") || {} } catch (e) {}
+
+    // Summoned again while a macro is recording: finish the recording.
+    if (root.opened && root.macroRecording && payload.stopRecording === true) {
+      root.stopMacroRecord()
+      return
+    }
+
     root.opened = true
     root.errorText = ""
     root.statusText = ""
@@ -95,10 +108,22 @@ Item {
     refreshApps()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
 
-    var payload = {}
-    try { payload = JSON.parse(payloadJson || "{}") || {} } catch (e) {}
+    // Payload fields (all optional):
+    //   tab: "defaults"        open on the defaults list
+    //   new: true              open the editor for a new shortcut
+    //   keys: "SUPER + F9"     …with this key already set
+    //   type: "macro"          …with this action type
+    //   record: true           …and start recording the macro right away
+    //   stopRecording: true    (while recording) stop and keep the steps
     if (payload.tab === "defaults") root.tab = "defaults"
-    if (payload.new === true) Qt.callLater(function() { root.startNew("") })
+    if (payload.new === true) Qt.callLater(function() {
+      root.startNew(typeof payload.keys === "string" ? payload.keys : "")
+      if (typeof payload.type === "string" && K.actionType(payload.type).value === payload.type) root.setType(payload.type)
+      if (payload.record === true && root.draft.spec.type === "macro") {
+        root.recording = false
+        root.startMacroRecord()
+      }
+    })
   }
 
   function close() {
@@ -254,6 +279,7 @@ Item {
   function closeEditor() {
     root.editorOpen = false
     root.recording = false
+    root.macroRecording = false
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -274,6 +300,88 @@ Item {
   function setType(type) {
     if (type === root.draft.spec.type) return
     setDraft({ spec: K.emptySpec(type) })
+  }
+
+  // ---- macros
+
+  function startMacroRecord() {
+    root.macroEvents = []
+    root.macroRecording = true
+    // queued, so it lands after any focus change startNew() has pending
+    Qt.callLater(function() { macroRecorder.forceActiveFocus() })
+  }
+
+  function stopMacroRecord() {
+    root.macroRecording = false
+    if (root.macroEvents.length > 0) setSpec({ steps: K.stepsFromEvents(root.macroEvents) })
+    root.macroEvents = []
+    editorScope.forceActiveFocus()
+  }
+
+  function macroEvent(kind, event) {
+    if (event.isAutoRepeat) return
+    var key = K.macroKeyFromEvent(event.key, event.nativeScanCode, event.text)
+    if (!key) return
+    var now = Date.now()
+    var list = root.macroEvents.slice()
+    var held = heldMacroMods(list)
+    if (!K.isMacroModifier(key)) {
+      // Modifiers can change without a key event of their own (a virtual
+      // keyboard, or one pressed before recording started): bring the
+      // recording in line with what this key event says is held.
+      var want = K.macroModsFromMask(event.modifiers)
+      for (var i = 0; i < held.length; i++)
+        if (want.indexOf(held[i]) === -1) list.push({ kind: "up", key: held[i], t: now })
+      for (var j = 0; j < want.length; j++)
+        if (held.indexOf(want[j]) === -1) list.push({ kind: "down", key: want[j], t: now })
+    }
+    list.push({ kind: kind, key: key, t: now })
+    root.macroEvents = list
+  }
+
+  function heldMacroMods(list) {
+    var held = []
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i]
+      if (!K.isMacroModifier(e.key)) continue
+      if (e.kind === "down") { if (held.indexOf(e.key) === -1) held.push(e.key) }
+      else held = held.filter(function(k) { return k !== e.key })
+    }
+    return held
+  }
+
+  function setStep(i, patch) {
+    var steps = root.draft.spec.steps.slice()
+    steps[i] = Object.assign({}, steps[i], patch)
+    setSpec({ steps: steps })
+  }
+
+  function removeStep(i) {
+    var steps = root.draft.spec.steps.slice()
+    steps.splice(i, 1)
+    setSpec({ steps: steps })
+  }
+
+  function moveStep(i, delta) {
+    var steps = root.draft.spec.steps.slice()
+    var j = i + delta
+    if (j < 0 || j >= steps.length) return
+    var t = steps[i]; steps[i] = steps[j]; steps[j] = t
+    setSpec({ steps: steps })
+  }
+
+  function addStep() {
+    var steps = root.draft.spec.steps.slice()
+    steps.push({ kind: "tap", key: "Return", text: "", delay: 100 })
+    setSpec({ steps: steps })
+  }
+
+  // Plays the macro into the panel's own test box, which has keyboard focus.
+  function testMacro() {
+    if (K.validateMacro(root.draft.spec) !== "") return
+    macroTestField.text = ""
+    macroTestField.forceActiveFocus()
+    Quickshell.execDetached(["sh", "-c", K.renderMacroCommand(root.draft.spec)])
   }
 
   function setPreset(value) {
@@ -1428,6 +1536,312 @@ Item {
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
+                }
+
+                // macro
+                ColumnLayout {
+                  Layout.fillWidth: true
+                  visible: form.spec.type === "macro"
+                  spacing: Style.spacing.lg
+
+                  Rectangle {
+                    id: macroRecorder
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Style.space(58)
+                    radius: Style.cornerRadius
+                    color: root.macroRecording ? Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, 0.12) : root.faint
+                    border.width: root.macroRecording ? 2 : 1
+                    border.color: root.macroRecording ? Color.urgent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.2)
+
+                    Keys.onPressed: function(event) {
+                      if (!root.macroRecording) return
+                      event.accepted = true
+                      root.macroEvent("down", event)
+                    }
+                    Keys.onReleased: function(event) {
+                      if (!root.macroRecording) return
+                      event.accepted = true
+                      root.macroEvent("up", event)
+                    }
+
+                    Text {
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.spacing.xl
+                      anchors.right: macroRecordButton.left
+                      anchors.rightMargin: Style.spacing.lg
+                      anchors.verticalCenter: parent.verticalCenter
+                      elide: Text.ElideLeft
+                      text: {
+                        if (root.macroRecording) {
+                          var ev = root.macroEvents
+                          if (ev.length === 0) return "●  Recording — perform the keys now, then click Stop"
+                          var tail = ev.slice(-10).map(function(e) { return (e.kind === "down" ? "↓" : "↑") + K.macroKeyLabel(e.key) })
+                          return "●  " + ev.length + " events   " + tail.join(" ")
+                        }
+                        var n = (form.spec.steps || []).length
+                        return n === 0 ? "No steps yet — press Record and perform the keys" : K.macroSummary(form.spec)
+                      }
+                      color: root.macroRecording ? Color.urgent : (form.spec.steps && form.spec.steps.length ? root.foreground : root.dim)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    Button {
+                      id: macroRecordButton
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.spacing.lg
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: root.macroRecording ? "Stop" : (form.spec.steps && form.spec.steps.length ? "Re-record" : "Record")
+                      iconText: root.macroRecording ? "󰓛" : "󰑊"
+                      bordered: true
+                      selected: root.macroRecording
+                      foreground: root.foreground
+                      accent: root.macroRecording ? Color.urgent : root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.macroRecording ? root.stopMacroRecord() : root.startMacroRecord()
+                    }
+                  }
+
+                  Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: root.macroRecording
+                      ? "Every press and release is recorded with its timing, including Esc and Enter. Click Stop when you're done. Combos Hyprland itself uses (like Super + a key) can't reach this window — add those as steps below."
+                      : "Plays into whichever window is focused, via wtype. Delays are in milliseconds, before each step."
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.lg
+                    Text {
+                      text: "Start after"
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                    ButtonGroup {
+                      options: [
+                        { value: "0", label: "0" }, { value: "150", label: "0.15 s" },
+                        { value: "300", label: "0.3 s" }, { value: "600", label: "0.6 s" }, { value: "1000", label: "1 s" }
+                      ]
+                      value: String(form.spec.start)
+                      foreground: root.foreground
+                      background: root.background
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onChanged: function(v) { root.setSpec({ start: Number(v) }) }
+                    }
+                    Item { Layout.fillWidth: true }
+                    Text {
+                      text: "Repeat"
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                    TextField {
+                      Layout.preferredWidth: Style.space(56)
+                      foreground: root.foreground
+                      accent: root.accent
+                      font.family: root.fontFamily
+                      horizontalAlignment: TextInput.AlignHCenter
+                      validator: IntValidator { bottom: 1; top: 100 }
+                      text: String(form.spec.repeat || 1)
+                      onEditingFinished: root.setSpec({ repeat: Math.max(1, Math.min(100, parseInt(text) || 1)) })
+                    }
+                    Text {
+                      text: "×"
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+                  }
+
+                  Flow {
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.sm
+                    visible: form.spec.steps && form.spec.steps.length > 0
+                    Button {
+                      text: "Slower ×2"
+                      bordered: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.setSpec({ steps: K.scaleSteps(form.spec.steps, 2) })
+                    }
+                    Button {
+                      text: "Faster ×2"
+                      bordered: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.setSpec({ steps: K.scaleSteps(form.spec.steps, 0.5) })
+                    }
+                    Button {
+                      text: "Round to 50 ms"
+                      bordered: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.setSpec({ steps: K.roundSteps(form.spec.steps, 50) })
+                    }
+                    Button {
+                      text: "No delays"
+                      bordered: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.setSpec({ steps: K.scaleSteps(form.spec.steps, 0) })
+                    }
+                  }
+
+                  // timeline
+                  Column {
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.xs
+                    visible: form.spec.steps && form.spec.steps.length > 0
+
+                    Repeater {
+                      model: form.spec.steps || []
+                      RowLayout {
+                        id: stepRow
+                        required property var modelData
+                        required property int index
+                        width: parent.width
+                        spacing: Style.spacing.md
+
+                        Text {
+                          Layout.preferredWidth: Style.space(22)
+                          horizontalAlignment: Text.AlignRight
+                          text: String(stepRow.index + 1)
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+                        TextField {
+                          Layout.preferredWidth: Style.space(64)
+                          foreground: root.foreground
+                          accent: root.accent
+                          font.family: root.fontFamily
+                          horizontalAlignment: TextInput.AlignRight
+                          validator: IntValidator { bottom: 0; top: 600000 }
+                          text: String(stepRow.modelData.delay)
+                          // committed on finish: a live edit would rebuild this row mid-typing
+                          onEditingFinished: if (Number(text) !== stepRow.modelData.delay) root.setStep(stepRow.index, { delay: Math.max(0, parseInt(text) || 0) })
+                        }
+                        Text {
+                          text: "ms"
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+                        Dropdown {
+                          Layout.preferredWidth: Style.space(112)
+                          showLabel: false
+                          value: stepRow.modelData.kind
+                          options: K.MACRO_KINDS
+                          foreground: root.foreground
+                          background: root.background
+                          accent: root.accent
+                          fontFamily: root.fontFamily
+                          onChanged: function(v) { root.setStep(stepRow.index, { kind: v }) }
+                        }
+                        SearchableDropdown {
+                          Layout.fillWidth: true
+                          visible: stepRow.modelData.kind !== "text"
+                          showLabel: false
+                          value: stepRow.modelData.key
+                          placeholderText: "Search keys…"
+                          options: {
+                            var o = K.MACRO_KEY_OPTIONS
+                            var k = stepRow.modelData.key
+                            for (var i = 0; i < o.length; i++) if (o[i].value === k) return o
+                            return [{ value: k, label: k, description: "recorded" }].concat(o)
+                          }
+                          foreground: root.foreground
+                          background: root.background
+                          accent: root.accent
+                          fontFamily: root.fontFamily
+                          onChanged: function(v) { root.setStep(stepRow.index, { key: v }) }
+                        }
+                        TextField {
+                          Layout.fillWidth: true
+                          visible: stepRow.modelData.kind === "text"
+                          placeholderText: "Text to type"
+                          foreground: root.foreground
+                          accent: root.accent
+                          font.family: root.fontFamily
+                          text: stepRow.modelData.text || ""
+                          onEditingFinished: if (text !== stepRow.modelData.text) root.setStep(stepRow.index, { text: text })
+                        }
+                        PanelActionButton {
+                          iconText: "󰁝"
+                          tooltipText: "Move up"
+                          enabled: stepRow.index > 0
+                          opacity: enabled ? 1 : 0.3
+                          foreground: root.foreground
+                          onClicked: root.moveStep(stepRow.index, -1)
+                        }
+                        PanelActionButton {
+                          iconText: "󰁅"
+                          tooltipText: "Move down"
+                          enabled: stepRow.index < form.spec.steps.length - 1
+                          opacity: enabled ? 1 : 0.3
+                          foreground: root.foreground
+                          onClicked: root.moveStep(stepRow.index, 1)
+                        }
+                        PanelActionButton {
+                          iconText: "󰆴"
+                          tooltipText: "Remove step"
+                          foreground: root.foreground
+                          onClicked: root.removeStep(stepRow.index)
+                        }
+                      }
+                    }
+                  }
+
+                  RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.lg
+                    Button {
+                      text: "Add step"
+                      iconText: "󰐕"
+                      bordered: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.addStep()
+                    }
+                    Item { Layout.fillWidth: true }
+                    Button {
+                      text: "Test"
+                      iconText: "󰐊"
+                      bordered: true
+                      enabled: K.validateMacro(form.spec) === "" && !root.macroRecording
+                      opacity: enabled ? 1 : 0.4
+                      tooltipText: "Play the macro into the box below"
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: root.testMacro()
+                    }
+                  }
+
+                  TextField {
+                    id: macroTestField
+                    Layout.fillWidth: true
+                    visible: form.spec.steps && form.spec.steps.length > 0
+                    placeholderText: "Test area — press Test and the macro types here"
+                    foreground: root.foreground
+                    accent: root.accent
+                    font.family: root.fontFamily
+                    // The field handles typing first; whatever it leaves (Esc,
+                    // Ctrl+Enter…) is swallowed so a macro can't close the editor.
+                    Keys.priority: Keys.AfterItem
+                    Keys.onPressed: function(event) { event.accepted = true }
+                  }
                 }
 
                 // presets

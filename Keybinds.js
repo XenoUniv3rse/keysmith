@@ -313,7 +313,8 @@ var SYSTEM_ACTIONS = [
   { value: "shutdown", label: "Shut down", cmd: "omarchy-system-shutdown" },
   { value: "dismiss", label: "Dismiss last notification", cmd: "omarchy-shell notifications dismissOne" },
   { value: "dismiss-all", label: "Dismiss all notifications", cmd: "omarchy-shell notifications dismissAll" },
-  { value: "history", label: "Notification history", cmd: "omarchy-shell notifications showHistory" }
+  { value: "history", label: "Notification history", cmd: "omarchy-shell notifications showHistory" },
+  { value: "stop-macros", label: "Stop running macros", cmd: "pkill -x wtype" }
 ]
 
 var MENUS = [
@@ -337,6 +338,7 @@ var ACTION_TYPES = [
   { value: "open", label: "Open a link, file or folder", icon: "󰏌" },
   { value: "command", label: "Run a command", icon: "" },
   { value: "type", label: "Type text", icon: "󰌌" },
+  { value: "macro", label: "Play a keyboard macro", icon: "󰑋" },
   { value: "window", label: "Window & workspace", icon: "" },
   { value: "media", label: "Media, volume & brightness", icon: "󰝚" },
   { value: "capture", label: "Screenshot & capture", icon: "󰄀" },
@@ -380,8 +382,305 @@ function emptySpec(type) {
     preset: (presetsFor(type)[0] || {}).value || "", param: "1",
     pluginId: "", payload: "",
     menu: "", toggle: "nightlight",
-    expr: ""
+    expr: "",
+    steps: [], start: TYPE_DELAY_DEFAULT, repeat: 1
   }
+}
+
+// ---------------------------------------------------------------- macros
+//
+// A macro is a list of steps, each run after its own delay:
+//   { kind: "tap" | "down" | "up" | "text", key: <xkb keysym or modifier>, text, delay: ms }
+// plus a start delay (so the trigger chord is released first) and a repeat
+// count. It compiles to a single wtype command, so the binding keeps working
+// without Keysmith, and parses back from that command for editing.
+
+// wtype's own modifier names; everything else is an xkb keysym name.
+var MACRO_MODIFIERS = ["shift", "ctrl", "alt", "logo", "altgr"]
+
+function isMacroModifier(key) { return MACRO_MODIFIERS.indexOf(key) !== -1 }
+
+// Shifted symbols by the keysym name wtype needs to type them. wtype puts
+// each keysym on its own key, so "-M shift -k 1" types "1": a recorded "!"
+// has to be stored as "exclam" to come back out as "!".
+var SYMBOL_KEYSYMS = {
+  0x21: "exclam", 0x40: "at", 0x23: "numbersign", 0x24: "dollar", 0x25: "percent", 0x5e: "asciicircum",
+  0x26: "ampersand", 0x2a: "asterisk", 0x28: "parenleft", 0x29: "parenright", 0x5f: "underscore",
+  0x2b: "plus", 0x7b: "braceleft", 0x7d: "braceright", 0x3a: "colon", 0x22: "quotedbl",
+  0x7e: "asciitilde", 0x7c: "bar", 0x3c: "less", 0x3e: "greater", 0x3f: "question"
+}
+
+var MACRO_KEY_OPTIONS = (function() {
+  var out = []
+  var mods = [["logo", "Super"], ["shift", "Shift"], ["ctrl", "Ctrl"], ["alt", "Alt"], ["altgr", "AltGr"]]
+  var i
+  for (i = 0; i < mods.length; i++) out.push({ value: mods[i][0], label: mods[i][1], description: "Modifier" })
+  for (i = 0; i < 26; i++) {
+    var c = String.fromCharCode(97 + i)
+    out.push({ value: c, label: c, description: "Letter" })
+  }
+  for (i = 0; i < 26; i++) {
+    var u = String.fromCharCode(65 + i)
+    out.push({ value: u, label: u + "  (capital)", description: "Capital letter" })
+  }
+  for (i = 0; i <= 9; i++) out.push({ value: String(i), label: String(i), description: "Number" })
+  var named = [
+    ["Return", "Enter"], ["space", "Space"], ["Tab", "Tab"], ["Escape", "Escape"], ["BackSpace", "Backspace"],
+    ["Delete", "Delete"], ["Insert", "Insert"], ["Home", "Home"], ["End", "End"], ["Prior", "Page Up"],
+    ["Next", "Page Down"], ["Left", "← Left"], ["Right", "→ Right"], ["Up", "↑ Up"], ["Down", "↓ Down"],
+    ["Print", "Print Screen"], ["Menu", "Menu"]
+  ]
+  for (i = 0; i < named.length; i++) out.push({ value: named[i][0], label: named[i][1], description: "Navigation & editing" })
+  for (i = 1; i <= 24; i++) out.push({ value: "F" + i, label: "F" + i, description: "Function key" })
+  var punct = [["comma", ","], ["period", "."], ["slash", "/"], ["backslash", "\\"], ["semicolon", ";"],
+               ["apostrophe", "'"], ["grave", "`"], ["minus", "-"], ["equal", "="],
+               ["bracketleft", "["], ["bracketright", "]"]]
+  for (i = 0; i < punct.length; i++) out.push({ value: punct[i][0], label: punct[i][1] + "  " + punct[i][0], description: "Punctuation" })
+  for (var code in SYMBOL_KEYSYMS)
+    out.push({ value: SYMBOL_KEYSYMS[code], label: String.fromCharCode(Number(code)) + "  " + SYMBOL_KEYSYMS[code], description: "Symbol" })
+  var media = ["XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioMute", "XF86AudioPlay",
+               "XF86AudioNext", "XF86AudioPrev"]
+  for (i = 0; i < media.length; i++) out.push({ value: media[i], label: media[i].slice(4), description: "Media" })
+  return out
+})()
+
+var MACRO_KINDS = [
+  { value: "tap", label: "Tap" }, { value: "down", label: "Press" },
+  { value: "up", label: "Release" }, { value: "text", label: "Type text" }
+]
+
+function macroKeyLabel(key) {
+  for (var i = 0; i < MACRO_KEY_OPTIONS.length; i++)
+    if (MACRO_KEY_OPTIONS[i].value === key) return MACRO_KEY_OPTIONS[i].label.replace(/^[←→↑↓] /, "").replace(/  \(capital\)$/, "").replace(/^(\S+)  \S+$/, "$1")
+  return key
+}
+
+// Qt key event -> wtype key name, or "" to ignore. Printable keys are
+// recorded as the character they produced ("H", "exclam"), everything else by
+// the key Qt reports. The scan code is only a last resort for non-US layouts,
+// since virtual keyboards don't use the usual physical positions.
+function macroKeyFromEvent(qtKey, scanCode, text) {
+  var mods = { 0x01000020: "shift", 0x01000021: "ctrl", 0x01000022: "logo", 0x01000053: "logo",
+               0x01000054: "logo", 0x01000023: "alt", 0x01001103: "altgr" }
+  if (mods[qtKey]) return mods[qtKey]
+  if (qtKey >= 0x41 && qtKey <= 0x5a) {
+    var ch = String(text || "")
+    return ch.length === 1 && ch >= "A" && ch <= "Z" ? ch : String.fromCharCode(qtKey + 32)
+  }
+  if (qtKey >= 0x30 && qtKey <= 0x39) return String.fromCharCode(qtKey)
+  if (qtKey >= 0x01000030 && qtKey <= 0x01000047) return "F" + (qtKey - 0x01000030 + 1)
+  var punct = { 0x2c: "comma", 0x2e: "period", 0x2f: "slash", 0x5c: "backslash", 0x3b: "semicolon",
+                0x27: "apostrophe", 0x60: "grave", 0x2d: "minus", 0x3d: "equal", 0x5b: "bracketleft", 0x5d: "bracketright" }
+  if (punct[qtKey]) return punct[qtKey]
+  if (SYMBOL_KEYSYMS[qtKey]) return SYMBOL_KEYSYMS[qtKey]
+  var named = {
+    0x01000004: "Return", 0x01000005: "KP_Enter", 0x20: "space", 0x01000001: "Tab", 0x01000002: "Tab",
+    0x01000000: "Escape", 0x01000003: "BackSpace", 0x01000007: "Delete", 0x01000006: "Insert",
+    0x01000010: "Home", 0x01000011: "End", 0x01000016: "Prior", 0x01000017: "Next",
+    0x01000012: "Left", 0x01000014: "Right", 0x01000013: "Up", 0x01000015: "Down",
+    0x01000009: "Print", 0x01000055: "Menu", 0x01000024: "Caps_Lock"
+  }
+  if (named[qtKey]) return named[qtKey]
+  // Anything else from a non-US layout: fall back to the physical position.
+  var byCode = { 10: "1", 11: "2", 12: "3", 13: "4", 14: "5", 15: "6", 16: "7", 17: "8", 18: "9", 19: "0",
+                 20: "minus", 21: "equal", 34: "bracketleft", 35: "bracketright", 47: "semicolon",
+                 48: "apostrophe", 49: "grave", 51: "backslash", 59: "comma", 60: "period", 61: "slash" }
+  return byCode[scanCode] || ""
+}
+
+// Which of wtype's modifiers a Qt modifier mask holds.
+function macroModsFromMask(mask) {
+  var out = []
+  if (mask & 0x02000000) out.push("shift")
+  if (mask & 0x04000000) out.push("ctrl")
+  if (mask & 0x08000000) out.push("alt")
+  if (mask & 0x10000000) out.push("logo")
+  return out
+}
+
+// Recorded [{ kind: "down"|"up", key, t }] -> steps. A key pressed and
+// released with nothing in between becomes a tap; its hold time moves onto
+// the next step so the overall timing is kept. Anything still held at the end
+// is released.
+function stepsFromEvents(events) {
+  var steps = []
+  var held = []
+  var carry = 0
+  for (var i = 0; i < events.length; i++) {
+    var e = events[i]
+    var delay = i === 0 ? 0 : Math.max(0, Math.round(e.t - events[i - 1].t))
+    var last = steps[steps.length - 1]
+    if (e.kind === "up" && last && last.kind === "down" && last.key === e.key && !isMacroModifier(e.key)) {
+      last.kind = "tap"
+      carry += delay
+    } else {
+      steps.push({ kind: e.kind, key: e.key, text: "", delay: delay + carry })
+      carry = 0
+    }
+    if (e.kind === "down") { if (held.indexOf(e.key) === -1) held.push(e.key) }
+    else held = held.filter(function(k) { return k !== e.key })
+  }
+  // a release with no press (the recorder started mid-chord) does nothing useful
+  steps = steps.filter(function(st, idx) {
+    if (st.kind !== "up") return true
+    for (var j = idx - 1; j >= 0; j--) if (steps[j].key === st.key && steps[j].kind === "down") return true
+    return false
+  })
+  for (var h = 0; h < held.length; h++) steps.push({ kind: "up", key: held[h], text: "", delay: 0 })
+  return steps
+}
+
+function macroDuration(spec) {
+  var one = 0
+  for (var i = 0; i < (spec.steps || []).length; i++) one += Number(spec.steps[i].delay) || 0
+  return (Number(spec.start) || 0) + one * Math.max(1, Number(spec.repeat) || 1)
+}
+
+function scaleSteps(steps, factor) {
+  return steps.map(function(st) { return Object.assign({}, st, { delay: Math.round((Number(st.delay) || 0) * factor) }) })
+}
+
+function roundSteps(steps, grid) {
+  return steps.map(function(st) { return Object.assign({}, st, { delay: Math.round((Number(st.delay) || 0) / grid) * grid }) })
+}
+
+function macroArgs(spec) {
+  var out = ["-s", String(Math.max(0, Math.round(Number(spec.start) || 0)))]
+  var reps = Math.max(1, Math.min(100, Math.round(Number(spec.repeat) || 1)))
+  for (var r = 0; r < reps; r++) {
+    for (var i = 0; i < spec.steps.length; i++) {
+      var st = spec.steps[i]
+      var d = Math.max(0, Math.round(Number(st.delay) || 0))
+      if (d > 0) out.push("-s", String(d))
+      if (st.kind === "text") { out.push(shellQuote(st.text)); continue }
+      var mod = isMacroModifier(st.key)
+      if (st.kind === "tap") {
+        if (mod) out.push("-M", st.key, "-m", st.key)
+        else out.push("-k", st.key)
+      } else if (st.kind === "down") out.push(mod ? "-M" : "-P", st.key)
+      else if (st.kind === "up") out.push(mod ? "-m" : "-p", st.key)
+    }
+  }
+  return out
+}
+
+function renderMacroCommand(spec) { return "wtype " + macroArgs(spec).join(" ") }
+
+// Split a command the way sh would for the forms renderMacroCommand writes:
+// bare words and '…' runs (with '\'' escapes). Quoted words are marked so
+// text can't be mistaken for an option. Returns null on anything else.
+function shellTokens(cmd) {
+  var out = []
+  var i = 0, t = String(cmd)
+  while (i < t.length) {
+    while (i < t.length && t.charAt(i) === " ") i++
+    if (i >= t.length) break
+    var word = "", quoted = false
+    while (i < t.length && t.charAt(i) !== " ") {
+      var c = t.charAt(i)
+      if (c === "'") {
+        var end = t.indexOf("'", i + 1)
+        if (end === -1) return null
+        word += t.slice(i + 1, end)
+        quoted = true
+        i = end + 1
+      } else if (c === "\\" && t.charAt(i + 1) === "'") {
+        word += "'"; quoted = true; i += 2
+      } else if (/[;&|<>()$`"\\*?~#]/.test(c)) {
+        return null
+      } else {
+        word += c; i++
+      }
+    }
+    out.push({ word: word, quoted: quoted })
+  }
+  return out
+}
+
+// A wtype command -> macro spec, or null if it isn't one wtype command.
+function macroFromCommand(cmd) {
+  var tokens = shellTokens(cmd)
+  if (!tokens || tokens.length < 2 || tokens[0].word !== "wtype" || tokens[0].quoted) return null
+  var spec = emptySpec("macro")
+  spec.start = 0
+  var steps = []
+  var pending = 0
+  var i = 1
+  var first = true
+  var textOnly = false
+  function arg() { var a = tokens[i + 1]; i += 2; return a ? a.word : null }
+  while (i < tokens.length) {
+    var tok = tokens[i]
+    if (!tok.quoted && !textOnly && tok.word === "--") { textOnly = true; i++; continue }
+    if (!tok.quoted && !textOnly && /^-[sdkPpMm]$/.test(tok.word)) {
+      var flag = tok.word, value = arg()
+      if (value === null) return null
+      if (flag === "-s") {
+        if (!/^\d+$/.test(value)) return null
+        if (first) spec.start = Number(value)
+        else pending += Number(value)
+        first = false
+        continue
+      }
+      first = false
+      if (flag === "-d") continue  // per-character delay for text; not modelled
+      var step = { kind: "", key: value, text: "", delay: pending }
+      pending = 0
+      if (flag === "-k") step.kind = "tap"
+      else if (flag === "-P" || flag === "-M") step.kind = "down"
+      else step.kind = "up"
+      steps.push(step)
+      continue
+    }
+    if (!tok.quoted && !textOnly && tok.word.charAt(0) === "-") return null  // an option we don't model
+    first = false
+    steps.push({ kind: "text", key: "", text: tok.word, delay: pending })
+    pending = 0
+    i++
+  }
+  if (steps.length === 0) return null
+  // Collapse an exact repetition back into a repeat count.
+  var n = steps.length
+  for (var period = 1; period <= n / 2; period++) {
+    if (n % period !== 0) continue
+    var same = true
+    for (var j = period; j < n && same; j++) {
+      var a = steps[j], b = steps[j % period]
+      same = a.kind === b.kind && a.key === b.key && a.text === b.text && a.delay === b.delay
+    }
+    if (same) { spec.repeat = n / period; steps = steps.slice(0, period); break }
+  }
+  spec.steps = steps
+  return spec
+}
+
+function validateMacro(spec) {
+  if (!spec.steps || spec.steps.length === 0) return "Record or add at least one step"
+  for (var i = 0; i < spec.steps.length; i++) {
+    var st = spec.steps[i]
+    if (st.kind === "text") {
+      if (st.text === "") return "Step " + (i + 1) + ": enter the text"
+      if (st.text.charAt(0) === "-") return "Step " + (i + 1) + ": text can't start with “-” (add a minus key step before it)"
+    } else if (!/^[A-Za-z0-9_]+$/.test(st.key || "")) return "Step " + (i + 1) + ": pick a key"
+    if (!(Number(st.delay) >= 0)) return "Step " + (i + 1) + ": delay must be 0 or more"
+  }
+  return ""
+}
+
+function macroSummary(spec) {
+  var n = (spec.steps || []).length
+  var secs = macroDuration(spec) / 1000
+  var keys = []
+  var more = false
+  for (var i = 0; i < n; i++) {
+    if (keys.length === 6) { more = true; break }
+    var st = spec.steps[i]
+    if (st.kind === "tap") keys.push(macroKeyLabel(st.key))
+    else if (st.kind === "text") keys.push("“" + (st.text.length > 12 ? st.text.slice(0, 12) + "…" : st.text) + "”")
+    else if (st.kind === "down" && isMacroModifier(st.key)) keys.push(macroKeyLabel(st.key) + "+")
+  }
+  return "Macro · " + n + (n === 1 ? " step" : " steps") + " · " + secs.toFixed(secs < 10 ? 1 : 0) + " s"
+    + (spec.repeat > 1 ? " · ×" + spec.repeat : "") + (keys.length ? " · " + keys.join(" ") + (more ? " …" : "") : "")
 }
 
 // ----------------------------------------------------- reading a binding
@@ -437,6 +736,10 @@ function specFromCommand(cmd) {
   if ((m = c.match(/^omarchy-toggle-([a-z-]+)$/))) { s = emptySpec("toggle"); s.toggle = m[1]; return s }
   if ((m = c.match(/^wtype(?: -s (\d+))? -- (.+)$/)) && (q = shellWord(m[2])) !== null) {
     s = emptySpec("type"); s.text = q; s.delay = m[1] ? Number(m[1]) : 0; return s
+  }
+  if (/^wtype /.test(c)) {
+    var macro = macroFromCommand(c)
+    if (macro) return macro
   }
   s.cmd = c
   return s
@@ -517,6 +820,8 @@ function renderDispatcher(spec, desc) {
     if (spec.mode === "launch") return luaLiteral({ launch: spec.cmd })
     if (spec.mode === "terminal") return luaLiteral({ tui: spec.cmd })
     return luaString(spec.cmd)
+  case "macro":
+    return luaString(renderMacroCommand(spec))
   case "type":
     var delay = Math.max(0, Math.round(Number(spec.delay) || 0))
     return luaString("wtype" + (delay > 0 ? " -s " + delay : "") + " -- " + shellQuote(spec.text))
@@ -570,6 +875,7 @@ function validate(b) {
   case "open": if (!trim(s.target)) return "Enter a link or path"; break
   case "command": if (!trim(s.cmd)) return "Enter a command"; break
   case "type": if (s.text === "") return "Enter the text to type"; break
+  case "macro": var mv = validateMacro(s); if (mv) return mv; break
   case "window": case "media": case "capture": case "system":
     var p = findPreset(presetsFor(s.type), s.preset)
     if (!p) return "Pick an action"
@@ -591,6 +897,7 @@ function summarize(spec, names) {
   case "webapp": return "Web app " + spec.url.replace(/^https?:\/\//, "") + (spec.focus ? " (or focus it)" : "")
   case "open": return "Open " + spec.target
   case "command": return (spec.mode === "terminal" ? "In terminal: " : spec.mode === "launch" ? "Launch: " : "Run: ") + spec.cmd
+  case "macro": return macroSummary(spec)
   case "type": return "Type “" + (spec.text.length > 40 ? spec.text.slice(0, 40) + "…" : spec.text) + "”"
   case "window": case "media": case "capture": case "system":
     p = findPreset(presetsFor(spec.type), spec.preset)
