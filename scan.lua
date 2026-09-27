@@ -109,13 +109,17 @@ local function src_path(source)
   return p
 end
 
-local self_source = debug.getinfo(1, "S").source
+-- The scanner's own handle on the debug library. The config never sees
+-- `debug` (see sandbox()): with it, a config could read the scanner's
+-- private copies of io.open and friends back out of their closures.
+local getinfo = debug.getinfo
+local self_source = getinfo(1, "S").source
 
 -- The first frame that isn't this scanner or Omarchy's helpers.lua: that's
 -- the line a person would point at as "where this binding comes from".
 local function origin()
   for level = 3, 40 do
-    local info = debug.getinfo(level, "Sl")
+    local info = getinfo(level, "Sl")
     if not info then break end
     if info.source ~= self_source and info.what ~= "C" then
       local p = src_path(info.source)
@@ -282,7 +286,32 @@ end
 
 local warnings = {}
 
+local text_load, text_loadfile, text_dofile = load, loadfile, dofile
+
 local function sandbox()
+  -- No debug library: debug.getupvalue / debug.getlocal would hand the
+  -- config the real io.open captured below. traceback only formats text.
+  local traceback = debug.traceback
+  debug = { traceback = traceback }
+  package.loaded.debug = debug
+
+  -- Text chunks only. Precompiled bytecode is unverified in Lua and can be
+  -- crafted to read or write arbitrary memory, which would undo all of this.
+  load = function(chunk, name, _, env)
+    if env == nil then return text_load(chunk, name, "t") end
+    return text_load(chunk, name, "t", env)
+  end
+  loadfile = function(path, _, env)
+    if env == nil then return text_loadfile(path, "t") end
+    return text_loadfile(path, "t", env)
+  end
+  dofile = function(path)
+    local chunk, err = text_loadfile(path, "t")
+    if not chunk then error(err, 2) end
+    return chunk()
+  end
+  string.dump = function() error("string.dump is blocked during keysmith scan", 2) end
+
   -- commands report failure: a config branching on one takes the
   -- "not available" path rather than believing something ran
   os.execute = function(cmd)
@@ -303,14 +332,25 @@ local function sandbox()
     return open_file(path, mode)
   end
   io.output = function() return stdout end
-  -- a config that prints must not corrupt the JSON this script emits
+  -- a config that prints (or closes stdout) must not touch the JSON this
+  -- script emits through its private `stdout` handle
   io.write = function() return stdout end
+  io.stdout = null_handle({ true })
+  io.close = function(f) if f and f ~= stdout then return f:close() end return true end
   print = function() end
 
   package.loadlib = function() return nil, "blocked during keysmith scan", "absent" end
   package.cpath = ""
-  -- keep only the preload and Lua-file searchers; drop the C loaders
-  for i = #package.searchers, 3, -1 do package.searchers[i] = nil end
+  -- keep the preload searcher and a text-only Lua-file searcher; drop the
+  -- stock one (it accepts bytecode files) and the C loaders
+  for i = #package.searchers, 2, -1 do package.searchers[i] = nil end
+  package.searchers[2] = function(name)
+    local path, err = package.searchpath(name, package.path)
+    if not path then return "\n\t" .. err end
+    local chunk, loadErr = text_loadfile(path, "t")
+    if not chunk then error(loadErr, 2) end
+    return chunk, path
+  end
 
   -- One module failing under the stubs shouldn't hide every binding after
   -- the require that loaded it.

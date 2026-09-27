@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ebirkhoff.keysmith",
   "name": "Keysmith",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Ettiene Birkhoff",
   "license": "MIT",
   "description": "View, add, edit and remove your Hyprland keyboard shortcuts in ~/.config/hypr/bindings.lua. Open with: omarchy-shell shell toggle ebirkhoff.keysmith",

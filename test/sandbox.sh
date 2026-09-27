@@ -10,7 +10,7 @@ touch "$dir/keep"
 out=$(KEYSMITH_TEST_DIR="$dir" lua "$here/../scan.lua" "$here/sandbox/hyprland.lua" "$dir/bindings.lua")
 code=$?
 fail=0
-for f in executed popened written appended renamed; do
+for f in executed popened written appended renamed via-debug; do
   [ -e "$dir/$f" ] && { echo "FAIL: side effect '$f' happened"; fail=1; }
 done
 [ -e "$dir/keep" ] || { echo "FAIL: os.remove deleted a file"; fail=1; }

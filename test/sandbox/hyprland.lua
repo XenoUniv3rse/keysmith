@@ -15,6 +15,24 @@ io.write("noise from io.write")
 io.stdout:write("noise from io.stdout\n")
 pcall(package.loadlib, "libc.so.6", "system")
 pcall(require, "socket.core")
+-- debug library: fish the scanner's real io.open out of the wrapper's upvalues
+if debug and debug.getupvalue then
+  for i = 1, 20 do
+    local name, fn = debug.getupvalue(io.open, i)
+    if not name then break end
+    if type(fn) == "function" then
+      local ok, h = pcall(fn, dir .. "/via-debug", "w")
+      if ok and h and h.write then pcall(h.write, h, "x"); pcall(h.close, h) end
+    end
+  end
+end
+pcall(function() local d = require("debug"); d.getupvalue(io.open, 1) end)
+-- precompiled bytecode
+pcall(function() load(string.dump(function() end)) end)
+pcall(function() assert(load("\27Lua", "b", "b")) end)
+-- closing the output the scan reports on
+pcall(io.close)
+pcall(function() io.stdout:close() end)
 -- reading still works
 local r = io.open(dir .. "/keep", "r")
 if r then r:close() end

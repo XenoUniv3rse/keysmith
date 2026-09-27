@@ -13,17 +13,25 @@ the shortcuts in `~/.config/hypr/bindings.lua`, without hand-writing Lua.
 omarchy plugin add https://github.com/XenoUniv3rse/keysmith.git --enable --yes
 ```
 
-Optional launcher entry (so it shows up under **Super + Space › Keysmith**):
+Optional: add it to the Omarchy menu, so **Super + Space** finds it (under
+*Setup › Keysmith*). Put this line inside the `{ … }` in
+`~/.config/omarchy/extensions/omarchy-menu.jsonc`:
 
-```bash
-cp ~/.config/omarchy/plugins/ebirkhoff.keysmith/keysmith.desktop ~/.local/share/applications/
+```jsonc
+"setup.keysmith": {"icon":"󰧹","label":"Keysmith","description":"Keyboard shortcuts and macros","action":"omarchy-shell shell summon ebirkhoff.keysmith '{}'"},
 ```
+
+Prefer this over the bundled `keysmith.desktop`. The app launcher shows a
+"Launching …" popup until a new window appears, and Keysmith is an overlay,
+not a window, so from the app list that popup lingers for 15 seconds. Use the
+`.desktop` file only for other launchers:
+`cp keysmith.desktop ~/.local/share/applications/`.
 
 ## Remove
 
 ```bash
 omarchy plugin remove ebirkhoff.keysmith --yes
-rm -f ~/.local/share/applications/keysmith.desktop
+rm -f ~/.local/share/applications/keysmith.desktop   # if you installed it
 ```
 
 Your shortcuts stay: they are plain Lua in `~/.config/hypr/bindings.lua`.
@@ -32,7 +40,7 @@ you can delete them whenever you like.
 
 ## Open it
 
-- **Super + Space**, type *Keysmith* (with the launcher entry installed), or
+- **Super + Space**, type *Keysmith* (with the menu entry above added), or
 - `omarchy-shell shell toggle ebirkhoff.keysmith`, or
 - bind it to a key — from inside Keysmith: *New shortcut › Toggle a shell plugin / panel › Keysmith*.
 
@@ -128,7 +136,12 @@ omarchy-shell shell summon ebirkhoff.keysmith '{"new":true,"type":"macro","recor
   - Commands (`os.execute`, `io.popen`) report failure without running.
   - File writes, deletes and renames pretend to succeed but touch nothing.
   - `os.exit` and native (C) modules are blocked.
-  - Output the config prints is ignored.
+  - The `debug` library is withheld (only `debug.traceback` remains), so the
+    config can't pull the scanner's real `io.open` out of its closures.
+  - Code loads from text only: no precompiled bytecode through `load`,
+    `loadfile`, `dofile` or `require`, and `string.dump` is blocked.
+  - Output the config prints is ignored, and it can't close the scanner's
+    stdout.
 
   Reading files and loading Lua modules still work. So opening Keysmith never
   repeats your config's side effects. A module that fails under the stubs is
