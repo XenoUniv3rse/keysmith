@@ -85,6 +85,16 @@ Options: works on lock screen, repeat while held, fire on release.
 - **Reading.** `scan.lua` runs your real `hyprland.lua` against recording
   stubs for `hl` and `o`. Loops, `require`s and helpers resolve exactly as in
   Hyprland, so the list matches what Hyprland registers.
+- **The scan is sandboxed.** While your config runs for the scan, anything
+  that would reach outside the process is a no-op:
+  - Commands (`os.execute`, `io.popen`) report failure without running.
+  - File writes, deletes and renames pretend to succeed but touch nothing.
+  - `os.exit` and native (C) modules are blocked.
+  - Output the config prints is ignored.
+
+  Reading files and loading Lua modules still work. So opening Keysmith never
+  repeats your config's side effects. A module that fails under the stubs is
+  skipped with a warning, rather than hiding every shortcut after it.
 - **Writing.** Keysmith rewrites only the exact source lines of plain
   top-level `o.bind` / `hl.bind` / `hl.unbind` calls. It shows bindings built
   in loops, functions or other files, but leaves those for hand-editing.
@@ -101,8 +111,11 @@ Options: works on lock screen, repeat while held, fire on release.
 
 Needs `lua` (a Hyprland dependency). *Type text* needs `wtype`.
 
-Tests: `node test/run.js <scan.json>`, where the scan comes from
-`lua scan.lua ~/.config/hypr/hyprland.lua ~/.config/hypr/bindings.lua`.
+Tests:
+- `test/sandbox.sh` checks that a config trying to run commands and touch
+  files has no effect during a scan.
+- `node test/run.js <scan.json>` checks the model against a real scan
+  (`lua scan.lua ~/.config/hypr/hyprland.lua ~/.config/hypr/bindings.lua > scan.json`).
 
 ## License
 

@@ -4,7 +4,8 @@
 const fs = require("fs"), path = require("path"), vm = require("vm")
 const src = fs.readFileSync(path.join(__dirname, "..", "Keybinds.js"), "utf8").replace(/^\.pragma library\s*/, "")
 const K = {}; vm.createContext(K); vm.runInContext(src, K)
-const scan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"))
+const rawScan = fs.readFileSync(process.argv[2], "utf8")
+const scan = JSON.parse(rawScan.slice(rawScan.lastIndexOf("@@KEYSMITH-SCAN@@\n") + "@@KEYSMITH-SCAN@@\n".length))
 const m = K.buildModel(scan, "/usr/share/omarchy", process.env.HOME)
 let fail = 0
 const ok = (c, msg) => { if (!c) { fail++; console.log("FAIL", msg) } }

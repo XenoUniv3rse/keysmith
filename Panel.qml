@@ -129,7 +129,12 @@ Item {
 
   function applyScan(text) {
     var scan
-    try { scan = JSON.parse(text) } catch (e) {
+    // scan.lua prints a marker line before its JSON; anything the config
+    // itself wrote to stdout comes before it and is dropped.
+    var raw = String(text || "")
+    var at = raw.lastIndexOf("@@KEYSMITH-SCAN@@\n")
+    if (at !== -1) raw = raw.slice(at + "@@KEYSMITH-SCAN@@\n".length)
+    try { scan = JSON.parse(raw) } catch (e) {
       root.errorText = "Could not read bindings: " + String(text || e).slice(0, 200)
       return
     }
@@ -138,6 +143,8 @@ Item {
     root.model = K.buildModel(scan, root.omarchyPath, root.home)
     root.scanned = true
     if (root.loadError !== "") root.errorText = "Config stopped loading early: " + root.loadError.split("\n")[0]
+    else if ((scan.warnings || []).length > 0)
+      root.errorText = "Skipped a module that failed to load, so its shortcuts are missing: " + String(scan.warnings[0]).split("\n")[0]
   }
 
   function refreshApps() {

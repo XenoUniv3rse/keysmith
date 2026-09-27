@@ -4,7 +4,7 @@
 --
 --   lua scan.lua <hyprland.lua> <bindings.lua>
 --
--- Prints one JSON object:
+-- Prints a marker line (MARKER below), then one JSON object:
 --
 --   events   every hl.bind / hl.unbind in load order, with the file and line
 --            that caused it; binds from bindings.lua also carry the raw call
@@ -13,9 +13,14 @@
 --            was scanned
 --   blocks   "-- BEGIN <owner>" / "-- END <owner>" fences in bindings.lua
 --
--- Nothing is applied: every hl.* function only records.
+-- Nothing is applied: every hl.* function only records, and the config runs
+-- sandboxed (see sandbox()) so it can't run commands or change files.
 
 local config_path, user_path = arg[1], arg[2]
+
+-- The JSON follows this line. Anything a config writes to stdout on its own
+-- lands before it and is ignored by the panel.
+local MARKER = "@@KEYSMITH-SCAN@@"
 
 -- ------------------------------------------------------------------ json
 
@@ -75,12 +80,22 @@ end
 
 -- -------------------------------------------------------- source tracking
 
+-- Lexical path cleanup ("//", "/./", "/x/../"), so a module found through
+-- package.path compares equal to the path the panel passed in. Pure Lua: the
+-- scan runs no external commands.
 local function real(p)
-  if not p then return "" end
-  local h = io.popen("realpath -m " .. "'" .. p:gsub("'", "'\\''") .. "' 2>/dev/null")
-  local r = h and h:read("l") or p
-  if h then h:close() end
-  return r or p
+  if not p or p == "" then return "" end
+  local absolute = p:sub(1, 1) == "/"
+  local parts = {}
+  for part in p:gmatch("[^/]+") do
+    if part == ".." then
+      if #parts > 0 and parts[#parts] ~= ".." then parts[#parts] = nil
+      elseif not absolute then parts[#parts + 1] = part end
+    elseif part ~= "." then
+      parts[#parts + 1] = part
+    end
+  end
+  return (absolute and "/" or "") .. table.concat(parts, "/")
 end
 
 local user_real = real(user_path)
@@ -234,8 +249,83 @@ o = setmetatable({}, {
 local config_dir = config_path:match("^(.*)/[^/]*$") or "."
 package.path = config_dir .. "/?.lua;" .. config_dir .. "/?/init.lua;" .. package.path
 
+-- The config runs to be read, not applied, so anything that would reach
+-- outside this process becomes a no-op while it runs: shell commands
+-- (os.execute, io.popen), file writes, deletes and renames, exiting, and
+-- native modules. Reading files and loading Lua modules stay allowed, since
+-- that is how the config finds its own parts. The scanner keeps private
+-- copies of what it needs itself.
+local open_file = io.open
+local stdout = io.stdout
+
+-- Blocked calls pretend to succeed, the way writing to /dev/null does, so a
+-- config that checks its own writes (super-w-wait asserts on its state file)
+-- keeps loading and its later bindings still get scanned.
+
+-- A handle that reads as empty and swallows writes. Used for io.popen and for
+-- opening a file to write.
+local function null_handle(close_result)
+  return setmetatable({}, { __index = {
+    read = function(_, fmt)
+      fmt = fmt or "l"
+      if fmt == "a" or fmt == "*a" then return "" end
+      return nil
+    end,
+    lines = function() return function() return nil end end,
+    write = function(self) return self end,
+    flush = function(self) return self end,
+    setvbuf = function() return true end,
+    seek = function() return 0 end,
+    close = function() return table.unpack(close_result) end,
+  } })
+end
+
+local warnings = {}
+
+local function sandbox()
+  -- commands report failure: a config branching on one takes the
+  -- "not available" path rather than believing something ran
+  os.execute = function(cmd)
+    if cmd == nil then return false end  -- "is a shell available?"
+    return nil, "exit", 1
+  end
+  io.popen = function() return null_handle({ nil, "exit", 1 }) end
+
+  os.remove = function() return true end
+  os.rename = function() return true end
+  os.tmpname = function() return "/dev/null" end
+  os.exit = function() error("os.exit is blocked during keysmith scan", 2) end
+  os.setlocale = function() return nil end
+
+  io.open = function(path, mode)
+    mode = mode or "r"
+    if mode:find("[wa+]") then return null_handle({ true }) end
+    return open_file(path, mode)
+  end
+  io.output = function() return stdout end
+  -- a config that prints must not corrupt the JSON this script emits
+  io.write = function() return stdout end
+  print = function() end
+
+  package.loadlib = function() return nil, "blocked during keysmith scan", "absent" end
+  package.cpath = ""
+  -- keep only the preload and Lua-file searchers; drop the C loaders
+  for i = #package.searchers, 3, -1 do package.searchers[i] = nil end
+
+  -- One module failing under the stubs shouldn't hide every binding after
+  -- the require that loaded it.
+  local real_require = require
+  require = function(name)
+    local ok, result = pcall(real_require, name)
+    if ok then return result end
+    warnings[#warnings + 1] = tostring(result)
+    return nil
+  end
+end
+
 local load_error = nil
 do
+  sandbox()
   local ok, err = pcall(dofile, config_path)
   if not ok then load_error = tostring(err) end
 end
@@ -244,7 +334,7 @@ end
 
 local lines = {}
 do
-  local f = io.open(user_path, "r")
+  local f = open_file(user_path, "r")
   if f then
     local text = f:read("a")
     f:close()
@@ -339,11 +429,13 @@ do
   end
 end
 
-io.write(encode({
+stdout:write("\n" .. MARKER .. "\n")
+stdout:write(encode({
   userFile = user_real,
   loadError = load_error,
+  warnings = warnings,
   events = events,
   lines = lines,
   blocks = blocks,
 }))
-io.write("\n")
+stdout:write("\n")
