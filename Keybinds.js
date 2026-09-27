@@ -332,23 +332,26 @@ var TOGGLES = [
   { value: "touchpad", label: "Touchpad" }, { value: "touchscreen", label: "Touchscreen" }
 ]
 
+// Icons are Nerd Font Material Design glyphs (U+F0000 range). The five
+// written as surrogate-pair escapes are md-console, md-view-grid, md-power,
+// md-language-lua and md-function-variant.
 var ACTION_TYPES = [
   { value: "app", label: "Open an app", icon: "󰀻" },
   { value: "webapp", label: "Open a web app", icon: "󰖟" },
   { value: "open", label: "Open a link, file or folder", icon: "󰏌" },
-  { value: "command", label: "Run a command", icon: "" },
+  { value: "command", label: "Run a command", icon: "\uDB80\uDD8D" },
   { value: "type", label: "Type text", icon: "󰌌" },
   { value: "macro", label: "Play a keyboard macro", icon: "󰑋" },
-  { value: "window", label: "Window & workspace", icon: "" },
+  { value: "window", label: "Window & workspace", icon: "\uDB81\uDD70" },
   { value: "media", label: "Media, volume & brightness", icon: "󰝚" },
   { value: "capture", label: "Screenshot & capture", icon: "󰄀" },
-  { value: "system", label: "System & notifications", icon: "" },
+  { value: "system", label: "System & notifications", icon: "\uDB81\uDC25" },
   { value: "plugin", label: "Toggle a shell plugin / panel", icon: "󰏗" },
   { value: "menu", label: "Open an Omarchy menu", icon: "󰍜" },
   { value: "toggle", label: "Omarchy toggle", icon: "󰔡" },
   { value: "nothing", label: "Do nothing (block the key)", icon: "󰜺" },
-  { value: "lua", label: "Custom Lua dispatcher", icon: "" },
-  { value: "function", label: "Lua function", icon: "", hidden: true }
+  { value: "lua", label: "Custom Lua dispatcher", icon: "\uDB82\uDCB1" },
+  { value: "function", label: "Lua function", icon: "\uDB82\uDC71", hidden: true }
 ]
 
 function actionType(value) {
