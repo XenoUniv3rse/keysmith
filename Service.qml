@@ -22,12 +22,17 @@ QtObject {
   readonly property string dest: Quickshell.env("HOME") + "/.local/share/applications/keysmith.desktop"
   readonly property string marker: "^X-Keysmith-Managed=true$"
 
+  // The temp file is created by mktemp (O_EXCL, random name) in the
+  // destination directory, so no pre-existing file or symlink is ever written
+  // through, and mv replaces the entry atomically without following a link.
   readonly property string installScript:
       '[ -f "$1" ] || exit 0\n'
     + 'if [ -e "$2" ] && ! grep -q "$3" "$2"; then exit 0; fi\n'
     + 'mkdir -p "${2%/*}" || exit 0\n'
     + 'if cmp -s "$1" "$2"; then exit 0; fi\n'
-    + 'cp -f "$1" "$2.keysmith.new" && mv -f "$2.keysmith.new" "$2"\n'
+    + 'tmp=$(mktemp "${2%/*}/.keysmith.desktop.XXXXXXXX") || exit 0\n'
+    + 'if cat "$1" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$2"; then exit 0; fi\n'
+    + 'rm -f "$tmp"\n'
 
   readonly property string removeScript:
     'grep -q "$2" "$1" 2>/dev/null && rm -f "$1"\n'

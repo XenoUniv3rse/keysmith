@@ -49,6 +49,9 @@ Item {
   property string revertText: ""
   property bool reverting: false
   property string pendingStatus: ""
+  // The undo stack as it was before the pending write, restored if the
+  // write is abandoned.
+  property var pendingUndo: []
 
   property string errorText: ""
   property string statusText: ""
@@ -525,26 +528,29 @@ Item {
       return false
     }
     var next = K.applyOps(root.lines, ops).join("\n") + "\n"
-    var stack = root.undoStack.slice()
+    var before = root.undoStack
+    var stack = before.slice()
     stack.push(current)
     root.undoStack = stack
-    write(next, status)
+    write(next, status, before)
     return true
   }
 
   function undo() {
     if (root.undoStack.length === 0 || root.selfWrite) return
-    var stack = root.undoStack.slice()
+    var before = root.undoStack
+    var stack = before.slice()
     var prev = stack.pop()
     root.undoStack = stack
-    write(prev, "Undone")
+    write(prev, "Undone", before)
   }
 
-  function write(text, status) {
+  function write(text, status, undoBefore) {
     root.errorText = ""
     root.statusText = "Saving…"
     root.pendingStatus = status
     root.pendingText = text
+    root.pendingUndo = undoBefore || root.undoStack
     root.selfWrite = true
     if (!root.backedUp) {
       // One backup per session, taken before the first write lands.
@@ -562,12 +568,13 @@ Item {
     if (out !== "" && out !== root.baselineErrors && !root.reverting && root.undoStack.length > 0) {
       // Hyprland rejected it: put the old file back rather than leave a
       // broken config behind.
-      var stack = root.undoStack.slice()
+      var before = root.undoStack
+      var stack = before.slice()
       var prev = stack.pop()
       root.undoStack = stack
       root.reverting = true
       root.revertText = out
-      write(prev, "")
+      write(prev, "", before)
       return
     }
     if (root.reverting) {
@@ -614,11 +621,25 @@ Item {
     }
   }
 
+  // bindings.lua is only overwritten once the backup copy has succeeded. If
+  // it fails, the save is abandoned: nothing is written and the undo stack
+  // goes back to how it was.
   Process {
     id: backupProc
-    onExited: function(code) {
-      root.backedUp = true
-      bindingsFile.setText(root.pendingText)
+    stderr: StdioCollector { id: backupErr; waitForEnd: true }
+    onExited: function(code, status) {
+      if (code === 0 && !status) {  // status 0 = QProcess::NormalExit
+        root.backedUp = true
+        bindingsFile.setText(root.pendingText)
+        return
+      }
+      root.selfWrite = false
+      root.reverting = false
+      root.undoStack = root.pendingUndo
+      root.pendingText = ""
+      root.statusText = ""
+      var why = String(backupErr.text || "").trim().split("\n")[0]
+      root.errorText = "Couldn't back up bindings.lua, so nothing was saved" + (why !== "" ? ": " + why : "")
     }
   }
 
