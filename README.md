@@ -51,7 +51,13 @@ o.window({ tag = "keysmith-window" }, { size = { 1000, 720 } })
 - **My shortcuts** — everything in `bindings.lua`, with which Omarchy default
   each one replaces.
 - **Omarchy defaults** — every default binding, with *Override*, *Disable* and
-  *Re-enable*.
+  *Turn back on*.
+- **Disabled defaults** — every Omarchy default that is currently off, and
+  what switched it off: your `hl.unbind`, a binding of yours that replaced it,
+  or another file. *Turn back on* (or `Enter`) removes the unbind or your
+  replacement, after a confirmation that says which. Defaults switched off
+  outside `bindings.lua` are listed with the file to change. Open straight
+  to it with `omarchy-shell shell summon ebirkhoff.keysmith '{"tab":"disabled"}'`.
 - **Editor** — record the shortcut by pressing it, or pick modifiers + a key
   from a searchable list, or type it (`SUPER + SHIFT + E`). Conflicts are shown
   before you save, and the needed `hl.unbind` is added for you.
@@ -120,10 +126,10 @@ omarchy-shell shell summon ebirkhoff.keysmith '{"new":true,"type":"macro","recor
 | | |
 |---|---|
 | `↑` `↓` / `j` `k` | select |
-| `Enter` | edit |
+| `Enter` | edit · turn back on (in *Disabled defaults*) |
 | `Del` | remove |
 | `N` | new shortcut |
-| `Tab` | switch list |
+| `Tab` / `Shift+Tab` | next / previous list |
 | `/` | search |
 | `Ctrl+Z` | undo |
 | `Esc` | close |
@@ -153,7 +159,8 @@ omarchy-shell shell summon ebirkhoff.keysmith '{"new":true,"type":"macro","recor
   in loops, functions or other files, but leaves those for hand-editing.
 - **Safety.**
   - It backs up `bindings.lua` (`bindings.lua.bak.keysmith.<timestamp>`) before
-    its first write in each session.
+    its first write in each session. If the backup fails, nothing is written
+    and the error is shown.
   - After every save it runs `hyprctl reload` and `hyprctl configerrors`. If
     the change introduces a new error, the file is reverted automatically.
   - There's an Undo button.

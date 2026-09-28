@@ -114,12 +114,13 @@ Item {
 
     // Payload fields (all optional):
     //   tab: "defaults"        open on the defaults list
+    //   tab: "disabled"        open on the switched-off defaults
     //   new: true              open the editor for a new shortcut
     //   keys: "SUPER + F9"     …with this key already set
     //   type: "macro"          …with this action type
     //   record: true           …and start recording the macro right away
     //   stopRecording: true    (while recording) stop and keep the steps
-    if (payload.tab === "defaults") root.tab = "defaults"
+    if (payload.tab === "defaults" || payload.tab === "disabled") root.tab = payload.tab
     if (payload.new === true) Qt.callLater(function() {
       root.startNew(typeof payload.keys === "string" ? payload.keys : "")
       if (typeof payload.type === "string" && K.actionType(payload.type).value === payload.type) root.setType(payload.type)
@@ -213,7 +214,9 @@ Item {
   // Rows for the current tab and search, with a header wherever the source
   // changes.
   readonly property var visibleRows: {
-    var src = root.tab === "mine" ? root.model.mine : root.model.defaults
+    var src = root.tab === "mine" ? root.model.mine
+            : root.tab === "disabled" ? root.disabledDefaults
+            : root.model.defaults
     var q = root.query.toLowerCase().trim()
     var out = []
     var lastGroup = null
@@ -234,7 +237,7 @@ Item {
   }
 
   function groupOf(r) {
-    if (root.tab === "defaults") {
+    if (root.tab !== "mine") {
       var base = r.file.replace(/^.*\//, "").replace(/\.lua$/, "")
       var dir = r.file.indexOf("/apps/") !== -1 ? "Apps · " : ""
       return dir + base.charAt(0).toUpperCase() + base.slice(1).replace(/-/g, " ")
@@ -251,6 +254,9 @@ Item {
 
   readonly property int mineCount: root.model.mine.length
   readonly property int defaultsCount: root.model.defaults.length
+  readonly property var disabledDefaults: root.model.defaults.filter(function(r) { return !r.active })
+  readonly property int disabledCount: root.disabledDefaults.length
+  readonly property var tabs: ["mine", "defaults", "disabled"]
 
   // --------------------------------------------------------------- editing
 
@@ -500,13 +506,31 @@ Item {
            "Disabled " + row.keys)
   }
 
-  // The user row that switched a default off, if it is a plain hl.unbind.
+  // Turn a switched-off default back on by removing whatever in bindings.lua
+  // switched it off: a plain hl.unbind, or your binding that replaced it.
+  function reEnable(row) {
+    if (!row || row.active) return
+    var by = disablerOf(row)
+    if (!by) {
+      var ev = row.event.removedBy
+      root.errorText = row.keys + " was switched off in " + (ev ? K.shortPath(ev.origin.file, root.home) : "another file") + " — turn it back on there"
+      return
+    }
+    if (!by.removable) { root.errorText = row.keys + ": " + by.lockedReason; return }
+    root.errorText = ""
+    root.askRemove(by)
+  }
+
+  // The user row that switched a default off: a plain hl.unbind ("disable"),
+  // or a binding of yours whose paired hl.unbind replaced it ("bind").
   function disablerOf(row) {
     var by = row.event.removedBy
     if (!by || by.source !== "mine") return null
+    // Match on the event's load-order index: rows reach the delegate through
+    // the ListView model as copies, so identity comparison never matches.
     for (var i = 0; i < root.model.mine.length; i++) {
       var r = root.model.mine[i]
-      if (r.unbind === by) return r
+      if (r.unbind && r.unbind.index === by.index) return r
     }
     return null
   }
@@ -796,7 +820,9 @@ Item {
           else if (event.key === Qt.Key_Down || (plain && event.key === Qt.Key_J)) { moveCursor(1); event.accepted = true }
           else if (event.key === Qt.Key_Up || (plain && event.key === Qt.Key_K)) { moveCursor(-1); event.accepted = true }
           else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-            root.tab = root.tab === "mine" ? "defaults" : "mine"; root.cursorIndex = -1; event.accepted = true
+            var step = event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1
+            var at = root.tabs.indexOf(root.tab)
+            root.tab = root.tabs[(at + step + root.tabs.length) % root.tabs.length]; root.cursorIndex = -1; event.accepted = true
           }
           else if (plain && (event.key === Qt.Key_Slash)) { search.forceActiveFocus(); event.accepted = true }
           else if (plain && event.key === Qt.Key_N) { root.startNew(""); event.accepted = true }
@@ -804,12 +830,14 @@ Item {
           else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || (plain && event.key === Qt.Key_E)) {
             var r = cursorRow()
             if (r && root.tab === "mine") root.startEdit(r)
+            else if (r && root.tab === "disabled") root.reEnable(r)
             else if (r) root.startNew(r.keys)
             event.accepted = true
           }
           else if (event.key === Qt.Key_Delete || (plain && event.key === Qt.Key_D)) {
             var d = cursorRow()
             if (d && root.tab === "mine") root.askRemove(d)
+            else if (d && root.tab === "disabled") root.reEnable(d)
             event.accepted = true
           }
         }
@@ -915,7 +943,8 @@ Item {
           ButtonGroup {
             options: [
               { value: "mine", label: "My shortcuts  " + root.mineCount },
-              { value: "defaults", label: "Omarchy defaults  " + root.defaultsCount }
+              { value: "defaults", label: "Omarchy defaults  " + root.defaultsCount },
+              { value: "disabled", label: "Disabled defaults  " + root.disabledCount }
             ]
             value: root.tab
             foreground: root.foreground
@@ -965,8 +994,8 @@ Item {
             required property int index
             readonly property var row: modelData
             readonly property bool isHeader: row.header === true
-            readonly property bool isDefault: root.tab === "defaults"
-            readonly property bool off: isDefault && !row.active
+            readonly property bool isDefault: root.tab !== "mine"
+            readonly property bool off: !isHeader && isDefault && !row.active
             readonly property var disabler: isDefault && off ? root.disablerOf(row) : null
             readonly property bool hot: hover.hovered || root.cursorIndex === index
 
@@ -1001,7 +1030,8 @@ Item {
               enabled: !rowItem.isHeader
               onTapped: { root.cursorIndex = rowItem.index; keyCatcher.forceActiveFocus() }
               onDoubleTapped: {
-                if (rowItem.isDefault) root.startNew(rowItem.row.keys)
+                if (rowItem.off) root.reEnable(rowItem.row)
+                else if (rowItem.isDefault) root.startNew(rowItem.row.keys)
                 else root.startEdit(rowItem.row)
               }
             }
@@ -1061,7 +1091,10 @@ Item {
                     tint: root.accent
                   }
                   Badge {
-                    text: rowItem.off ? (rowItem.row.removedBy === "mine" ? (rowItem.disabler ? "disabled by you" : "replaced by you") : "disabled elsewhere") : ""
+                    text: !rowItem.off ? ""
+                          : !rowItem.disabler ? "disabled in " + (rowItem.row.event.removedBy ? K.shortPath(rowItem.row.event.removedBy.origin.file, root.home) : "another file")
+                          : rowItem.disabler.kind === "disable" ? "disabled by you"
+                          : "replaced by your “" + (rowItem.disabler.desc || rowItem.disabler.summary) + "”"
                     tint: root.accent
                   }
                   Badge { text: !rowItem.isHeader && !rowItem.isDefault ? rowItem.row.lockedReason : "" }
@@ -1125,9 +1158,12 @@ Item {
                   onClicked: root.disableDefault(rowItem.row)
                 }
                 Button {
-                  text: "Re-enable"
+                  text: "Turn back on"
                   visible: rowItem.disabler !== null && rowItem.disabler.removable
                   bordered: true
+                  tooltipText: rowItem.disabler && rowItem.disabler.kind === "bind"
+                               ? "Remove your replacement so Omarchy's default comes back"
+                               : "Remove the hl.unbind that switched this off"
                   foreground: root.foreground
                   accent: root.accent
                   fontFamily: root.fontFamily
@@ -1140,7 +1176,9 @@ Item {
           Text {
             anchors.centerIn: parent
             visible: root.scanned && root.visibleRows.length === 0
-            text: root.query !== "" ? "No shortcuts match “" + root.query + "”" : "No shortcuts yet — press N to add one"
+            text: root.query !== "" ? "No shortcuts match “" + root.query + "”"
+                : root.tab === "disabled" ? "All of Omarchy's default shortcuts are on"
+                : "No shortcuts yet — press N to add one"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -1154,6 +1192,8 @@ Item {
           text: {
             if (root.errorText !== "") return root.errorText
             if (root.statusText !== "") return root.statusText
+            if (root.tab === "disabled")
+              return "↑↓ select · Enter turn back on · N new · Tab switch list · / search · Ctrl+Z undo · Esc close"
             return "↑↓ select · Enter edit · Del remove · N new · Tab switch list · / search · Ctrl+Z undo · Esc close"
           }
           color: root.errorText !== "" ? Color.urgent : root.dim
@@ -2071,7 +2111,7 @@ Item {
         anchors.fill: parent
         opened: root.confirmRow !== null
         message: root.confirmMessage
-        confirmText: root.confirmRow && root.confirmRow.kind === "disable" ? "Re-enable" : "Remove"
+        confirmText: root.confirmRow && root.confirmRow.kind === "disable" ? "Turn back on" : "Remove"
         background: root.background
         foreground: root.foreground
         fontFamily: root.fontFamily
