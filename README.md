@@ -4,7 +4,7 @@
 
 <img src="preview.png" alt="The Keysmith panel: a new-shortcut editor with Ctrl + Alt + T recorded, over the list of Omarchy default bindings" width="820">
 
-Keysmith is an Omarchy shell panel for viewing, adding, editing and removing
+Keysmith is an Omarchy shell app for viewing, adding, editing and removing
 the shortcuts in `~/.config/hypr/bindings.lua`, without hand-writing Lua.
 
 ## Install
@@ -13,25 +13,16 @@ the shortcuts in `~/.config/hypr/bindings.lua`, without hand-writing Lua.
 omarchy plugin add https://github.com/XenoUniv3rse/keysmith.git --enable --yes
 ```
 
-Optional: add it to the Omarchy menu, so **Super + Space** finds it (under
-*Setup › Keysmith*). Put this line inside the `{ … }` in
-`~/.config/omarchy/extensions/omarchy-menu.jsonc`:
-
-```jsonc
-"setup.keysmith": {"icon":"󰧹","label":"Keysmith","description":"Keyboard shortcuts and macros","action":"omarchy-shell shell summon ebirkhoff.keysmith '{}'"},
-```
-
-Prefer this over the bundled `keysmith.desktop`. The app launcher shows a
-"Launching …" popup until a new window appears, and Keysmith is an overlay,
-not a window, so from the app list that popup lingers for 15 seconds. Use the
-`.desktop` file only for other launchers:
-`cp keysmith.desktop ~/.local/share/applications/`.
+While the plugin is enabled, Keysmith keeps `keysmith.desktop` in
+`~/.local/share/applications/`, so **Super + Space** finds it by name. Disabling
+the plugin takes the entry away again. Only a file carrying the
+`X-Keysmith-Managed=true` marker is ever written or deleted, so a
+`keysmith.desktop` of your own is left alone.
 
 ## Remove
 
 ```bash
 omarchy plugin remove ebirkhoff.keysmith --yes
-rm -f ~/.local/share/applications/keysmith.desktop   # if you installed it
 ```
 
 Your shortcuts stay: they are plain Lua in `~/.config/hypr/bindings.lua`.
@@ -40,9 +31,20 @@ you can delete them whenever you like.
 
 ## Open it
 
-- **Super + Space**, type *Keysmith* (with the menu entry above added), or
+- **Super + Space**, type *Keysmith*, or
 - `omarchy-shell shell toggle ebirkhoff.keysmith`, or
 - bind it to a key — from inside Keysmith: *New shortcut › Toggle a shell plugin / panel › Keysmith*.
+
+Keysmith opens as an ordinary window titled *Keysmith*, so Hyprland tiles it
+like any other app. To have it float, centred, add this to
+`~/.config/hypr/hyprland.lua`:
+
+```lua
+o.window({ class = "^org\\.quickshell$", title = "^Keysmith$" }, { tag = "+keysmith-window" })
+o.window({ tag = "keysmith-window" }, { float = true })
+o.window({ tag = "keysmith-window" }, { center = true })
+o.window({ tag = "keysmith-window" }, { size = { 1000, 720 } })
+```
 
 ## What it does
 

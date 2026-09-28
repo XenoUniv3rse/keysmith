@@ -10,3 +10,4 @@ Terminal=false
 StartupNotify=false
 Categories=Settings;DesktopSettings;
 Keywords=keysmith;keybindings;shortcuts;hotkeys;hyprland;omarchy;keyboard;bind;
+X-Keysmith-Managed=true

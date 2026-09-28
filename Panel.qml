@@ -97,6 +97,7 @@ Item {
     }
 
     root.opened = true
+    window.visible = true
     root.errorText = ""
     root.statusText = ""
     root.query = ""
@@ -131,6 +132,7 @@ Item {
     root.recording = false
     root.confirmRow = null
     root.opened = false
+    window.visible = false
   }
 
   function dismiss() {
@@ -731,30 +733,29 @@ Item {
 
   // ------------------------------------------------------------------- UI
 
-  PanelWindow {
+  // A regular application window, like Plugin Depot. A Quickshell toplevel
+  // always reports class org.quickshell, so the title is what a Hyprland
+  // window rule matches on — keep it static.
+  FloatingWindow {
     id: window
     visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
-    color: "transparent"
-    exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "keysmith"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    title: "Keysmith"
+    color: root.background
 
-    Rectangle {
-      anchors.fill: parent
-      color: root.scrim
-      MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
+    implicitWidth: 1000
+    implicitHeight: 720
+    minimumSize: Qt.size(420, 360)
+
+    // Closed by the window manager (Super+W): tell the shell so the next
+    // toggle opens it again.
+    onVisibleChanged: {
+      if (!visible && root.opened) root.dismiss()
     }
 
     BorderSurface {
       id: card
-      anchors.centerIn: parent
-      width: Math.min(Style.space(1000), window.width - Style.gapsOut * 4)
-      height: Math.min(Style.space(720), window.height - Style.gapsOut * 4)
-      radius: Style.cornerRadius
+      anchors.fill: parent
       color: root.background
-      borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
       padding: Style.spacing.panelPadding
 
       MouseArea { anchors.fill: parent; onClicked: keyCatcher.forceActiveFocus() }

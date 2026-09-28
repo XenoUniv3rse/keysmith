@@ -5,9 +5,13 @@
   "version": "0.2.1",
   "author": "Ettiene Birkhoff",
   "license": "MIT",
-  "description": "View, add, edit and remove your Hyprland keyboard shortcuts in ~/.config/hypr/bindings.lua. Open with: omarchy-shell shell toggle ebirkhoff.keysmith",
-  "kinds": ["panel"],
+  "description": "View, add, edit and remove your Hyprland keyboard shortcuts in ~/.config/hypr/bindings.lua. Open from the Omarchy menu by searching 'Keysmith', or with: omarchy-shell shell toggle ebirkhoff.keysmith",
+  "kinds": [
+    "panel",
+    "service"
+  ],
   "entryPoints": {
-    "panel": "Panel.qml"
+    "panel": "Panel.qml",
+    "service": "Service.qml"
   }
 }
