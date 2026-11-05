@@ -81,8 +81,9 @@ end
 -- -------------------------------------------------------- source tracking
 
 -- Lexical path cleanup ("//", "/./", "/x/../"), so a module found through
--- package.path compares equal to the path the panel passed in. Pure Lua: the
--- scan runs no external commands.
+-- package.path compares equal to the path the panel passed in. Pure Lua, no
+-- external commands (the only command the scan runs is the directory listing
+-- behind its require_all replacement, see sandbox()).
 local function real(p)
   if not p or p == "" then return "" end
   local absolute = p:sub(1, 1) == "/"
@@ -137,10 +138,22 @@ local events = {}
 local pending_raw = nil   -- raw o.bind call waiting for the hl.bind it produces
 local wrap_depth = 0
 
+-- Stands in for anything the config asks Hyprland about. It reads as an empty
+-- list (noop[1] is nil, #noop is 0): Omarchy 4.5's workspace-modes.lua does
+-- `for _, p in ipairs(hl.get_loaded_plugins())`, which never ends if every
+-- index answers with another noop.
 local noop
 noop = setmetatable({}, {
   __noop = true,
-  __index = function() return noop end,
+  __index = function(_, k) if type(k) == "number" then return nil end return noop end,
+  -- comparisons and arithmetic on an unknown value still evaluate
+  __lt = function() return false end,
+  __le = function() return false end,
+  __add = function() return noop end, __sub = function() return noop end,
+  __mul = function() return noop end, __div = function() return noop end,
+  __idiv = function() return noop end, __mod = function() return noop end,
+  __unm = function() return noop end,
+  __concat = function(a, b) return (type(a) == "string" and a or "") .. (type(b) == "string" and b or "") end,
   __call = function() return noop end,
 })
 
@@ -221,7 +234,17 @@ hl = setmetatable({
     return noop
   end,
   get_config = function() return nil end,
-}, { __index = function() return noop end })
+}, { __index = function(_, k)
+  -- State queries answer like a session with nothing open: no window,
+  -- monitor or workspace (nil), and empty lists (get_windows, get_monitors,
+  -- get_loaded_plugins ...). Omarchy 4.5's qconsole and workspace-modes do
+  -- arithmetic on and loop over these while loading.
+  if type(k) == "string" and k:match("^get_") then
+    if k:match("s$") then return function() return {} end end
+    return function() return nil end
+  end
+  return noop
+end })
 
 -- Omarchy's helpers.lua opens with `o = o or {}` and then defines o.bind and
 -- friends on it. Catching those assignments lets the scanner see the raw
@@ -261,6 +284,11 @@ package.path = config_dir .. "/?.lua;" .. config_dir .. "/?/init.lua;" .. packag
 -- copies of what it needs itself.
 local open_file = io.open
 local stdout = io.stdout
+local list_dir = io.popen
+
+local function shell_quote(s)
+  return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+end
 
 -- Blocked calls pretend to succeed, the way writing to /dev/null does, so a
 -- config that checks its own writes (super-w-wait asserts on its state file)
@@ -350,6 +378,32 @@ local function sandbox()
     local chunk, loadErr = text_loadfile(path, "t")
     if not chunk then error(loadErr, 2) end
     return chunk, path
+  end
+
+  -- Omarchy 4.5 loads its default bindings (default/hypr/bindings/*.lua),
+  -- saved workspace layouts and toggles through require_all, which lists a
+  -- directory with `find` via io.popen. io.popen is blocked above, so supply
+  -- the same module with a listing the scanner runs itself: a fixed, read-only
+  -- command whose only input is the directory, quoted here.
+  package.preload["default.hypr.require_all"] = function()
+    local M = {}
+    function M.files(dir, module_prefix, options)
+      local exclude = options and options.exclude or {}
+      local h = list_dir and list_dir("find " .. shell_quote(dir) .. " -maxdepth 1 -type f -name '*.lua' -printf '%f\\n' 2>/dev/null | sort")
+      if not h then return end
+      local names = {}
+      for filename in h:lines() do names[#names + 1] = filename end
+      h:close()
+      for _, filename in ipairs(names) do
+        local name = filename:gsub("%.lua$", "")
+        if not exclude[name] then
+          local module = module_prefix and (module_prefix .. "." .. name) or name
+          if options and options.reload then package.loaded[module] = nil end
+          require(module)
+        end
+      end
+    end
+    return M
   end
 
   -- One module failing under the stubs shouldn't hide every binding after
